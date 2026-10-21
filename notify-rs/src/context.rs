@@ -6,8 +6,6 @@ pub struct BuildContext<'a> {
 }
 
 impl BuildContext<'_> {
-    // Used by the App's update pass.
-    #[allow(dead_code)]
     pub(crate) fn new() -> BuildContext<'static> {
         BuildContext {
             _marker: PhantomData,
