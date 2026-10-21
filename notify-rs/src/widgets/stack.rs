@@ -394,4 +394,15 @@ mod tests {
                 .contains("\n  Positioned 300x100x50 @ 0,0,0\n")
         );
     }
+
+    #[test]
+    fn stack_fit_passthrough_passes_constraints() {
+        assert_eq!(
+            layout_of(
+                W,
+                rc(Stack::new(vec![sized(50.0, 20.0)]).fit(StackFit::Passthrough))
+            ),
+            "Stack 300x100x0 @ 0,0,0\n  SizedBox 300x100x0 @ 0,0,0\n"
+        );
+    }
 }

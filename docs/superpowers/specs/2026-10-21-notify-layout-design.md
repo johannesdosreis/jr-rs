@@ -178,8 +178,10 @@ terceiros usam a mesma regra.
 ### 4.2 Fronteira de relayout
 
 Um element é fronteira quando, no último layout, valia
-`!parent_uses_size || element.sized_by_parent() || constraints.is_tight() || é a raiz`.
+`(!parent_uses_size || element.sized_by_parent() || constraints.is_tight() || é a raiz) && element.parent_data().is_none()`.
 O tamanho de uma fronteira não pode mudar sem que as restrições dela mudem.
+Um element que expõe `parent_data` nunca é fronteira, porque o layout do pai
+depende desses dados e mudanças abaixo dele precisam chegar ao pai.
 
 ### 4.3 Marcação
 
@@ -194,7 +196,7 @@ framework usa essa versão durante o `update`.
 
 **Quem marca:**
 - todo element **reconstruído** na passada de build se marca (quiet);
-- um element reconstruído que tem `parent_data()` marca também o pai (quiet), porque é o pai que lê esses dados;
+- um element reconstruído que tinha ou tem `parent_data()` (antes ou depois do `build`) marca também o pai (quiet), porque é o pai que lê esses dados;
 - elements novos já nascem com `needs_layout`.
 
 ### 4.4 Passada de layout
@@ -334,7 +336,7 @@ Os não posicionados ficam em `alignment.offset_of(filho, tamanho)`.
 - **Restrição em cada eixo:**
   - início e fim informados: exata em `max(0, tamanho − início − fim)`;
   - tamanho informado: exata nele;
-  - nenhum dos dois: de 0 a ∞.
+  - nenhum dos dois: de 0 a ∞ em X e Y; em Z, de 0 até a profundidade do `Stack`, para que uma interface plana continue plana.
 - **Posição em cada eixo:**
   - início informado: o início;
   - só o fim informado: `tamanho − fim − filho`;
@@ -399,6 +401,10 @@ se não houver filho.
 
 ### 5.9 Dados de pai fora do lugar
 
+Composições (`BuilderWidget`) são transparentes também para `parent_data`:
+o `parent_data` de um builder é o do seu filho. Assim, um builder que devolve
+um `Expanded` funciona dentro de um `Flex`.
+
 `Expanded`, `Flexible`, `Spacer` e `Positioned` fora de um `Flex` ou
 `Stack` não têm efeito: o pai não lê os dados. O layout deles é o padrão, em
 que o filho passa direto. Isso fica na documentação desses widgets.
@@ -411,6 +417,7 @@ que o filho passa direto. Isso fica na documentação desses widgets.
 - **Tamanho devolvido por `Element::layout`** fora de `c` ou não finito:
   - em debug, pânico com `{Tipo}: tamanho {s:?} fora das restrições {c:?}`, em que `Tipo` é o nome curto do widget;
   - em release, valores não finitos viram o mínimo do eixo, e o resultado passa por `c.constrain`.
+- **A geometria pública nunca entra em pânico:** `constrain`, `enforce` e `tighten` com restrições inválidas devolvem um valor sem sentido em vez de chamar `f32::clamp`, e a validação acima reporta o problema. O `ConstrainedBox` passa as restrições internas pela mesma normalização do motor, com ou sem filho.
 - **Layouts impossíveis** (seção 5) usam `impossible_layout`, com estas mensagens:
 
   | Caso | Mensagem (depois de `layout impossível: `) | Em release |
