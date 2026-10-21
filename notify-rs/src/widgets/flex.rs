@@ -500,28 +500,19 @@ mod tests {
     use super::*;
     use crate::app::App;
     use crate::geometry::Size;
-    use crate::test_support::{LayoutProbe, Log, Probe, layout_of, rc, sized};
+    use crate::test_support::{
+        LayoutProbe, Log, Probe, app_with, layout_of, rc, root_children, sized, unbounded_layout,
+    };
     use crate::widgets::{Center, SizedBox};
 
     const W: Size = Size::flat(300.0, 100.0);
 
-    fn app_with(size: Size, root: Rc<dyn Widget>) -> App {
-        let mut app = App::new();
-        app.set_size(size);
-        app.set_root(root);
-        app
-    }
-
-    fn children_of(app: &App) -> &[Box<dyn Element>] {
-        app.root.as_ref().unwrap().children()
-    }
-
     fn xs(app: &App) -> Vec<f32> {
-        children_of(app).iter().map(|c| c.offset().x).collect()
+        root_children(app).iter().map(|c| c.offset().x).collect()
     }
 
     fn widths(app: &App) -> Vec<f32> {
-        children_of(app).iter().map(|c| c.size().width).collect()
+        root_children(app).iter().map(|c| c.size().width).collect()
     }
 
     fn three() -> Vec<Rc<dyn Widget>> {
@@ -529,13 +520,7 @@ mod tests {
     }
 
     fn unbounded(child: Rc<dyn Widget>) -> String {
-        let log = Log::default();
-        layout_of(
-            W,
-            rc(LayoutProbe::new("root", &log)
-                .child_constraints(Constraints::unbounded())
-                .children(vec![child])),
-        )
+        unbounded_layout(W, child)
     }
 
     #[test]
@@ -576,7 +561,7 @@ mod tests {
                 W,
                 rc(Row::new(vec![sized(50.0, 20.0)]).cross_axis_alignment(alignment)),
             );
-            let child = &children_of(&app)[0];
+            let child = &root_children(&app)[0];
             assert_eq!(
                 (child.offset().y, child.size().height),
                 (y, height),
@@ -746,7 +731,7 @@ mod tests {
             item(&log, "b", 2, 50.0),
         ])));
         assert_eq!(xs(&app), [0.0, 50.0, 80.0]);
-        assert_eq!(children_of(&app)[1].size(), Size::flat(30.0, 20.0));
+        assert_eq!(root_children(&app)[1].size(), Size::flat(30.0, 20.0));
     }
 
     #[test]

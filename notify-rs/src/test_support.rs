@@ -333,10 +333,30 @@ impl Element for LayoutProbeElement {
 
 /// Lays `root` out in a window (or volume) of `size` and returns `debug_layout`.
 pub(crate) fn layout_of(size: Size, root: Rc<dyn Widget>) -> String {
+    app_with(size, root).debug_layout()
+}
+
+/// An App laid out in a window (or volume) of `size`, with `root` mounted.
+pub(crate) fn app_with(size: Size, root: Rc<dyn Widget>) -> App {
     let mut app = App::new();
     app.set_size(size);
     app.set_root(root);
-    app.debug_layout()
+    app
+}
+
+pub(crate) fn root_children(app: &App) -> &[Box<dyn Element>] {
+    app.root.as_ref().unwrap().children()
+}
+
+/// `debug_layout` of `child` given unbounded constraints on every axis.
+pub(crate) fn unbounded_layout(size: Size, child: Rc<dyn Widget>) -> String {
+    let log = Log::default();
+    layout_of(
+        size,
+        rc(LayoutProbe::new("root", &log)
+            .child_constraints(Constraints::unbounded())
+            .children(vec![child])),
+    )
 }
 
 /// A `SizedBox` with the given width and height.
