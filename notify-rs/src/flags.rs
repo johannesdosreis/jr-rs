@@ -182,7 +182,6 @@ impl Flags {
         self.descendant_needs_layout.swap(false, SeqCst)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn parent(&self) -> Option<&Arc<Flags>> {
         self.parent.get()
     }

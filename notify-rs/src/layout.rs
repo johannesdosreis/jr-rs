@@ -138,6 +138,8 @@ mod tests {
     use crate::element::Element;
     use crate::geometry::{Constraints, Size};
     use crate::test_support::{Group, LayoutProbe, Log, rc};
+    use reactive_rs::Notifier;
+    use std::sync::Arc;
     use std::thread;
 
     fn probe(name: &'static str, log: &Log) -> LayoutProbe {
@@ -379,5 +381,35 @@ mod tests {
     #[test]
     fn impossible_layout_returns_in_release() {
         impossible_layout("teste");
+    }
+
+    #[test]
+    fn rebuilt_element_is_laid_out_again() {
+        let (log, notifier) = (Log::default(), Arc::new(Notifier::new()));
+        let mut app = chain(
+            &log,
+            tight(50.0, 50.0),
+            probe("mid", &log).child_constraints(loose(50.0, 50.0)),
+            probe("leaf", &log).notifier(notifier.clone()),
+        );
+        notifier.notify_listeners();
+        app.update();
+        assert_eq!(log.take(), ["layout mid", "layout leaf"]);
+    }
+
+    #[test]
+    fn rebuilt_element_with_parent_data_relayouts_its_parent() {
+        let (log, notifier) = (Log::default(), Arc::new(Notifier::new()));
+        let mut app = chain(
+            &log,
+            tight(50.0, 50.0),
+            probe("mid", &log).child_constraints(tight(50.0, 50.0)),
+            probe("leaf", &log)
+                .notifier(notifier.clone())
+                .parent_data(1),
+        );
+        notifier.notify_listeners();
+        app.update();
+        assert_eq!(log.take(), ["layout mid", "layout leaf"]);
     }
 }

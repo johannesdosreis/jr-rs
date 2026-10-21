@@ -164,6 +164,14 @@ fn visit(
         visit_all |= apply_provided(core, provided);
         let old = std::mem::take(&mut core.children);
         core.children = update_children(old, widgets, &flags, signal);
+        // A rebuilt element may have new children or configuration. Its parent
+        // reads its parent data, so the parent is laid out again too.
+        flags.mark_needs_layout_quiet();
+        if element.parent_data().is_some()
+            && let Some(parent) = flags.parent()
+        {
+            parent.mark_needs_layout_quiet();
+        }
     }
     let scope = child_scope(scope, element.core());
     for child in &mut element.core_mut().children {
