@@ -1,13 +1,16 @@
 // Not every helper is used by every module's tests.
 #![allow(dead_code)]
 
+use std::any::Any;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use reactive_rs::Notifier;
 
+use crate::app::App;
 use crate::context::BuildContext;
 use crate::element::{Element, ElementCore};
+use crate::geometry::{Constraints, Size};
 use crate::key::Key;
 use crate::widget::Widget;
 
@@ -194,4 +197,143 @@ impl Drop for ProbeElement {
     fn drop(&mut self) {
         self.log.push(format!("drop {}", self.name));
     }
+}
+
+/// A widget whose element logs "layout {name}" on every layout, lays out its
+/// children with configurable constraints and returns a configurable size.
+pub(crate) struct LayoutProbe {
+    name: &'static str,
+    log: Log,
+    size: Size,
+    children: Vec<Rc<dyn Widget>>,
+    child_constraints: Option<Constraints>,
+    parent_uses_size: bool,
+    sized_by_parent: bool,
+    notifier: Option<Arc<Notifier>>,
+    parent_data: Option<u32>,
+    raw_size: bool,
+}
+
+impl LayoutProbe {
+    pub(crate) fn new(name: &'static str, log: &Log) -> LayoutProbe {
+        LayoutProbe {
+            name,
+            log: log.clone(),
+            size: Size::ZERO,
+            children: Vec::new(),
+            child_constraints: None,
+            parent_uses_size: true,
+            sized_by_parent: false,
+            notifier: None,
+            parent_data: None,
+            raw_size: false,
+        }
+    }
+
+    pub(crate) fn size(mut self, size: Size) -> LayoutProbe {
+        self.size = size;
+        self
+    }
+
+    pub(crate) fn children(mut self, children: Vec<Rc<dyn Widget>>) -> LayoutProbe {
+        self.children = children;
+        self
+    }
+
+    pub(crate) fn child_constraints(mut self, constraints: Constraints) -> LayoutProbe {
+        self.child_constraints = Some(constraints);
+        self
+    }
+
+    pub(crate) fn parent_uses_size(mut self, uses: bool) -> LayoutProbe {
+        self.parent_uses_size = uses;
+        self
+    }
+
+    pub(crate) fn sized_by_parent(mut self, sized: bool) -> LayoutProbe {
+        self.sized_by_parent = sized;
+        self
+    }
+
+    pub(crate) fn notifier(mut self, notifier: Arc<Notifier>) -> LayoutProbe {
+        self.notifier = Some(notifier);
+        self
+    }
+
+    pub(crate) fn parent_data(mut self, data: u32) -> LayoutProbe {
+        self.parent_data = Some(data);
+        self
+    }
+
+    /// Returns the configured size without passing it through the constraints.
+    pub(crate) fn raw_size(mut self) -> LayoutProbe {
+        self.raw_size = true;
+        self
+    }
+}
+
+impl Widget for LayoutProbe {
+    fn notifier(&self) -> Option<&Arc<Notifier>> {
+        self.notifier.as_ref()
+    }
+
+    fn create_element(self: Rc<Self>) -> Box<dyn Element> {
+        Box::new(LayoutProbeElement {
+            core: ElementCore::new(self),
+        })
+    }
+}
+
+struct LayoutProbeElement {
+    core: ElementCore,
+}
+
+impl Element for LayoutProbeElement {
+    fn core(&self) -> &ElementCore {
+        &self.core
+    }
+
+    fn core_mut(&mut self) -> &mut ElementCore {
+        &mut self.core
+    }
+
+    fn build(&mut self, _ctx: &mut BuildContext<'_>) -> Vec<Rc<dyn Widget>> {
+        self.core.widget_as::<LayoutProbe>().children.clone()
+    }
+
+    fn layout(&mut self, constraints: Constraints) -> Size {
+        let widget = self.core.widget_as::<LayoutProbe>();
+        widget.log.push(format!("layout {}", widget.name));
+        let child_constraints = widget.child_constraints.unwrap_or(constraints);
+        for index in 0..self.core.children().len() {
+            self.core
+                .layout_child(index, child_constraints, widget.parent_uses_size);
+        }
+        if widget.raw_size {
+            widget.size
+        } else {
+            constraints.constrain(widget.size)
+        }
+    }
+
+    fn sized_by_parent(&self) -> bool {
+        self.core.widget_as::<LayoutProbe>().sized_by_parent
+    }
+
+    fn parent_data(&self) -> Option<&dyn Any> {
+        let widget: &dyn Any = &**self.core.widget();
+        widget
+            .downcast_ref::<LayoutProbe>()?
+            .parent_data
+            .as_ref()
+            .map(|data| data as &dyn Any)
+    }
+}
+
+/// Lays `root` out in a window (or volume) of `size` and returns `debug_layout`.
+pub(crate) fn layout_of(size: Size, root: Rc<dyn Widget>) -> String {
+    let mut app = App::new();
+    app.set_size(size);
+    app.set_root(root);
+    app.debug_layout()
 }

@@ -15,6 +15,7 @@ mod element;
 mod flags;
 mod geometry;
 mod key;
+mod layout;
 mod reconcile;
 mod widget;
 
@@ -26,5 +27,6 @@ pub use context::BuildContext;
 pub use element::{Element, ElementCore};
 pub use geometry::{Alignment, Axis, Constraints, EdgeInsets, Offset, Size};
 pub use key::Key;
+pub use layout::impossible_layout;
 pub use reactive_rs::{Listenable, Listener, Notifier};
 pub use widget::{BuilderWidget, Widget};

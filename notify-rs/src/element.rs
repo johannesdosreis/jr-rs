@@ -7,6 +7,7 @@ use reactive_rs::{Listenable, Listener, Notifier};
 
 use crate::context::{BuildContext, Dependencies, Provided};
 use crate::flags::Flags;
+use crate::geometry::{Constraints, Offset, Size};
 use crate::widget::Widget;
 
 /// A live instance of a widget in the tree. Implementors embed an
@@ -30,6 +31,35 @@ pub trait Element {
     fn mark_dirty(&self) {
         self.core().mark_dirty()
     }
+
+    /// Lays out the children (through
+    /// [`ElementCore::layout_child`]) and returns this element's size, within
+    /// `constraints`. By default, without children it takes the smallest size;
+    /// with children, each gets the same constraints and sits at the origin,
+    /// and the size is the largest child.
+    fn layout(&mut self, constraints: Constraints) -> Size {
+        crate::layout::default_layout(self.core_mut(), constraints)
+    }
+
+    /// Whether this element's size depends only on its constraints, which
+    /// makes it a relayout boundary.
+    fn sized_by_parent(&self) -> bool {
+        false
+    }
+
+    /// Data the parent reads from this element, such as a flex factor.
+    fn parent_data(&self) -> Option<&dyn Any> {
+        None
+    }
+
+    fn size(&self) -> Size {
+        self.core().size()
+    }
+
+    /// Position relative to the parent's minimum corner.
+    fn offset(&self) -> Offset {
+        self.core().offset()
+    }
 }
 
 /// The part of every element that the framework manages: its widget, its
@@ -41,6 +71,10 @@ pub struct ElementCore {
     pub(crate) subscription: Option<(Arc<Notifier>, usize)>,
     pub(crate) provided: HashMap<TypeId, Provided>,
     pub(crate) dependencies: Dependencies,
+    pub(crate) constraints: Option<Constraints>,
+    pub(crate) parent_uses_size: bool,
+    pub(crate) size: Size,
+    pub(crate) offset: Offset,
 }
 
 impl ElementCore {
@@ -52,6 +86,10 @@ impl ElementCore {
             subscription: None,
             provided: HashMap::new(),
             dependencies: HashMap::new(),
+            constraints: None,
+            parent_uses_size: true,
+            size: Size::ZERO,
+            offset: Offset::ZERO,
         }
     }
 
@@ -86,6 +124,43 @@ impl ElementCore {
     pub fn dirty_listener(&self) -> Listener {
         let flags = self.flags.clone();
         Arc::new(move || flags.mark_dirty())
+    }
+
+    /// Lays out the child at `index` and returns its size. Pass
+    /// `parent_uses_size = false` when this element's layout does not depend on
+    /// the child's size, which lets the child relayout on its own.
+    pub fn layout_child(
+        &mut self,
+        index: usize,
+        constraints: Constraints,
+        parent_uses_size: bool,
+    ) -> Size {
+        crate::layout::layout_element(&mut self.children[index], constraints, parent_uses_size)
+    }
+
+    /// Positions the child at `index`, relative to this element's minimum corner.
+    pub fn set_child_offset(&mut self, index: usize, offset: Offset) {
+        self.children[index].core_mut().offset = offset;
+    }
+
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    pub fn offset(&self) -> Offset {
+        self.offset
+    }
+
+    /// Schedules a new layout of this element. Safe from any thread through
+    /// [`needs_layout_listener`](Self::needs_layout_listener).
+    pub fn mark_needs_layout(&self) {
+        self.flags.mark_needs_layout();
+    }
+
+    /// A listener that schedules a new layout of this element.
+    pub fn needs_layout_listener(&self) -> Listener {
+        let flags = self.flags.clone();
+        Arc::new(move || flags.mark_needs_layout())
     }
 
     /// Listens to the current widget's notifier, moving the subscription when

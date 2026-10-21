@@ -129,8 +129,6 @@ impl Flags {
     /// Safe from any thread: marks this element for layout, then its ancestors
     /// up to the nearest relayout boundary (whose size cannot change), sets
     /// `descendant_needs_layout` above that boundary and requests an update.
-    // Consumed by ElementCore in the next task.
-    #[allow(dead_code)]
     pub(crate) fn mark_needs_layout(&self) {
         self.mark_needs_layout_quiet();
         if let Some(signal) = self.signal.get() {
@@ -160,33 +158,26 @@ impl Flags {
         }
     }
 
-    // Consumed by the layout pass in the next task.
-    #[allow(dead_code)]
     pub(crate) fn set_relayout_boundary(&self, boundary: bool) {
         self.relayout_boundary.store(boundary, SeqCst);
     }
 
-    #[allow(dead_code)]
     pub(crate) fn needs_layout(&self) -> bool {
         self.needs_layout.load(SeqCst)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn descendant_needs_layout(&self) -> bool {
         self.descendant_needs_layout.load(SeqCst)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn needs_layout_visit(&self) -> bool {
         self.needs_layout() || self.descendant_needs_layout()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn take_needs_layout(&self) -> bool {
         self.needs_layout.swap(false, SeqCst)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn take_descendant_needs_layout(&self) -> bool {
         self.descendant_needs_layout.swap(false, SeqCst)
     }

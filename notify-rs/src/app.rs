@@ -6,6 +6,8 @@ use std::sync::Arc;
 use crate::context::{BuildContext, Scope, apply_provided, child_scope, dependencies_changed};
 use crate::element::Element;
 use crate::flags::Signal;
+use crate::geometry::{Constraints, Size};
+use crate::layout::layout_element;
 use crate::reconcile::{destroy, update_child, update_children};
 use crate::widget::Widget;
 
@@ -13,6 +15,7 @@ use crate::widget::Widget;
 pub struct App {
     pub(crate) root: Option<Box<dyn Element>>,
     signal: Arc<Signal>,
+    size: Option<Size>,
     poisoned: bool,
     #[cfg(test)]
     visited: usize,
@@ -23,6 +26,7 @@ impl App {
         App {
             root: None,
             signal: Arc::new(Signal::new()),
+            size: None,
             poisoned: false,
             #[cfg(test)]
             visited: 0,
@@ -36,6 +40,15 @@ impl App {
         self.root = update_child(self.root.take(), Some(widget), None, &self.signal);
         self.rebuild_dirty();
         self.poisoned = false;
+    }
+
+    /// Sets the size of the root: the window, or the volume of a spatial app.
+    /// The root receives tight constraints of this size on the next update.
+    pub fn set_size(&mut self, size: Size) {
+        if self.size != Some(size) {
+            self.size = Some(size);
+            self.signal.request();
+        }
     }
 
     /// Registers the callback that asks the backend for a frame, replacing the
@@ -76,6 +89,9 @@ impl App {
             let scope: Scope = Rc::new(HashMap::new());
             visit(root, &scope, false, &self.signal, &mut visited);
         }
+        if let (Some(root), Some(size)) = (&mut self.root, self.size) {
+            layout_element(root, Constraints::tight(size), false);
+        }
         #[cfg(test)]
         {
             self.visited = visited;
@@ -88,6 +104,16 @@ impl App {
         let mut out = String::new();
         if let Some(root) = &self.root {
             write_tree(root.as_ref(), 0, &mut out);
+        }
+        out
+    }
+
+    /// Like [`debug_tree`](Self::debug_tree), with each element's size and its
+    /// offset relative to the parent: `Row 300x40x0 @ 0,0,0`.
+    pub fn debug_layout(&self) -> String {
+        let mut out = String::new();
+        if let Some(root) = &self.root {
+            write_layout(root.as_ref(), 0, &mut out);
         }
         out
     }
@@ -148,20 +174,38 @@ fn visit(
 }
 
 fn write_tree(element: &dyn Element, depth: usize, out: &mut String) {
-    let widget = element.widget();
-    out.push_str(&"  ".repeat(depth));
-    out.push_str(&short_type_name(widget.type_name()));
-    if let Some(key) = widget.key() {
-        let _ = write!(out, " #{key:?}");
-    }
+    write_label(element, depth, out);
     out.push('\n');
     for child in element.children() {
         write_tree(child.as_ref(), depth + 1, out);
     }
 }
 
+fn write_layout(element: &dyn Element, depth: usize, out: &mut String) {
+    write_label(element, depth, out);
+    let (size, offset) = (element.size(), element.offset());
+    let _ = writeln!(
+        out,
+        " {}x{}x{} @ {},{},{}",
+        size.width, size.height, size.depth, offset.x, offset.y, offset.z
+    );
+    for child in element.children() {
+        write_layout(child.as_ref(), depth + 1, out);
+    }
+}
+
+/// Indentation, short type name and key of the element's widget.
+fn write_label(element: &dyn Element, depth: usize, out: &mut String) {
+    let widget = element.widget();
+    out.push_str(&"  ".repeat(depth));
+    out.push_str(&short_type_name(widget.type_name()));
+    if let Some(key) = widget.key() {
+        let _ = write!(out, " #{key:?}");
+    }
+}
+
 /// Removes the module path of every segment: `a::b::C<d::E>` becomes `C<E>`.
-fn short_type_name(full: &str) -> String {
+pub(crate) fn short_type_name(full: &str) -> String {
     let mut out = String::new();
     let mut segment = String::new();
     let mut chars = full.chars().peekable();
