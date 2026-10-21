@@ -13,6 +13,7 @@ use crate::widget::Widget;
 pub struct App {
     pub(crate) root: Option<Box<dyn Element>>,
     signal: Arc<Signal>,
+    poisoned: bool,
     #[cfg(test)]
     visited: usize,
 }
@@ -22,6 +23,7 @@ impl App {
         App {
             root: None,
             signal: Arc::new(Signal::new()),
+            poisoned: false,
             #[cfg(test)]
             visited: 0,
         }
@@ -30,8 +32,10 @@ impl App {
     /// Mounts `widget` as the root, or updates the current root with it, and
     /// builds whatever that changed.
     pub fn set_root(&mut self, widget: Rc<dyn Widget>) {
+        self.begin();
         self.root = update_child(self.root.take(), Some(widget), None, &self.signal);
-        self.update();
+        self.rebuild_dirty();
+        self.poisoned = false;
     }
 
     /// Registers the callback that asks the backend for a frame, replacing the
@@ -49,6 +53,21 @@ impl App {
     /// Rebuilds the elements marked dirty since the last update, visiting only
     /// the branches that lead to them.
     pub fn update(&mut self) {
+        self.begin();
+        self.rebuild_dirty();
+        self.poisoned = false;
+    }
+
+    /// Panics if a previous call panicked in user code, since the tree may be
+    /// incomplete; otherwise stays poisoned until the current call returns.
+    fn begin(&mut self) {
+        if self.poisoned {
+            panic!("App envenenado por um pânico anterior");
+        }
+        self.poisoned = true;
+    }
+
+    fn rebuild_dirty(&mut self) {
         self.signal.clear();
         let mut visited = 0;
         if let Some(root) = &mut self.root
@@ -168,6 +187,7 @@ mod tests {
     use crate::test_support::{Group, Leaf, Log, Probe, rc};
     use crate::widget::BuilderWidget;
     use reactive_rs::Notifier;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst};
     use std::thread;
 
@@ -510,5 +530,71 @@ mod tests {
         for w in &watchers {
             assert_eq!(w.seen.load(SeqCst), 1000);
         }
+    }
+
+    struct Exploder {
+        notifier: Arc<Notifier>,
+        armed: Arc<AtomicBool>,
+    }
+
+    impl BuilderWidget for Exploder {
+        fn notifier(&self) -> Option<&Arc<Notifier>> {
+            Some(&self.notifier)
+        }
+
+        fn build(&self, _ctx: &mut BuildContext<'_>) -> Rc<dyn Widget> {
+            if self.armed.load(SeqCst) {
+                panic!("explodiu");
+            }
+            rc(Leaf::new())
+        }
+    }
+
+    fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
+        match err.downcast::<&str>() {
+            Ok(message) => message.to_string(),
+            Err(err) => err.downcast::<String>().map(|m| *m).unwrap_or_default(),
+        }
+    }
+
+    /// An App whose last update panicked, plus the exploder's notifier.
+    fn poisoned_app(extra: Vec<Rc<dyn Widget>>) -> App {
+        let (notifier, armed) = (Arc::new(Notifier::new()), Arc::new(AtomicBool::new(false)));
+        let mut children = vec![rc(Exploder {
+            notifier: notifier.clone(),
+            armed: armed.clone(),
+        })];
+        children.extend(extra);
+        let mut app = App::new();
+        app.set_root(rc(Group::new(children)));
+        armed.store(true, SeqCst);
+        notifier.notify_listeners();
+        assert!(catch_unwind(AssertUnwindSafe(|| app.update())).is_err());
+        app
+    }
+
+    #[test]
+    fn panic_in_build_poisons_the_app() {
+        let mut app = poisoned_app(vec![]);
+        let err = catch_unwind(AssertUnwindSafe(|| app.update())).unwrap_err();
+        assert_eq!(panic_message(err), "App envenenado por um pânico anterior");
+    }
+
+    #[test]
+    fn set_root_on_a_poisoned_app_panics() {
+        let mut app = poisoned_app(vec![]);
+        let err = catch_unwind(AssertUnwindSafe(|| app.set_root(rc(Leaf::new())))).unwrap_err();
+        assert_eq!(panic_message(err), "App envenenado por um pânico anterior");
+    }
+
+    #[test]
+    fn dropping_a_poisoned_app_releases_subscriptions() {
+        let (log, n) = (Log::default(), Arc::new(Notifier::new()));
+        let mut app = poisoned_app(vec![rc(Probe::new("a", &log).with_notifier(n.clone()))]);
+        let wakes = wake_counter(&mut app);
+        let before = wakes.load(SeqCst);
+        drop(app);
+        n.notify_listeners();
+        assert_eq!(wakes.load(SeqCst), before);
     }
 }
