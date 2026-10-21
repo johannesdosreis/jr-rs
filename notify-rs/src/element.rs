@@ -1,10 +1,11 @@
-use std::any::{Any, type_name};
+use std::any::{Any, TypeId, type_name};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use reactive_rs::{Listenable, Listener, Notifier};
 
-use crate::context::BuildContext;
+use crate::context::{BuildContext, Dependencies, Provided};
 use crate::flags::Flags;
 use crate::widget::Widget;
 
@@ -38,6 +39,8 @@ pub struct ElementCore {
     pub(crate) children: Vec<Box<dyn Element>>,
     pub(crate) flags: Arc<Flags>,
     pub(crate) subscription: Option<(Arc<Notifier>, usize)>,
+    pub(crate) provided: HashMap<TypeId, Provided>,
+    pub(crate) dependencies: Dependencies,
 }
 
 impl ElementCore {
@@ -47,6 +50,8 @@ impl ElementCore {
             children: Vec::new(),
             flags: Flags::new(),
             subscription: None,
+            provided: HashMap::new(),
+            dependencies: HashMap::new(),
         }
     }
 

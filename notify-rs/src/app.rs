@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::context::BuildContext;
+use crate::context::{BuildContext, Scope, apply_provided, child_scope, dependencies_changed};
 use crate::element::Element;
 use crate::flags::Signal;
 use crate::reconcile::{destroy, update_child, update_children};
@@ -53,7 +54,8 @@ impl App {
         if let Some(root) = &mut self.root
             && root.core().flags.needs_visit()
         {
-            visit(root, &self.signal, &mut visited);
+            let scope: Scope = Rc::new(HashMap::new());
+            visit(root, &scope, false, &self.signal, &mut visited);
         }
         #[cfg(test)]
         {
@@ -91,19 +93,37 @@ impl Drop for App {
     }
 }
 
-fn visit(element: &mut Box<dyn Element>, signal: &Arc<Signal>, visited: &mut usize) {
+/// Rebuilds `element` if it is dirty (or, in a full visit, if a value it read
+/// changed), then visits the children that need it. A full visit, triggered by
+/// an ancestor that started providing a new type, checks every descendant.
+fn visit(
+    element: &mut Box<dyn Element>,
+    scope: &Scope,
+    full: bool,
+    signal: &Arc<Signal>,
+    visited: &mut usize,
+) {
     *visited += 1;
     let flags = element.core().flags.clone();
-    let rebuild = flags.take_dirty();
+    let dirty = flags.take_dirty();
+    let rebuild = dirty || (full && dependencies_changed(element.core(), scope));
     flags.take_descendant_dirty();
+    let mut visit_all = full;
     if rebuild {
-        let widgets = element.build(&mut BuildContext::new());
-        let old = std::mem::take(&mut element.core_mut().children);
-        element.core_mut().children = update_children(old, widgets, &flags, signal);
+        element.core_mut().dependencies.clear();
+        let mut ctx = BuildContext::new(scope, &flags);
+        let widgets = element.build(&mut ctx);
+        let (provided, dependencies) = ctx.finish();
+        let core = element.core_mut();
+        core.dependencies = dependencies;
+        visit_all |= apply_provided(core, provided);
+        let old = std::mem::take(&mut core.children);
+        core.children = update_children(old, widgets, &flags, signal);
     }
+    let scope = child_scope(scope, element.core());
     for child in &mut element.core_mut().children {
-        if child.core().flags.needs_visit() {
-            visit(child, signal, visited);
+        if visit_all || child.core().flags.needs_visit() {
+            visit(child, &scope, visit_all, signal, visited);
         }
     }
 }

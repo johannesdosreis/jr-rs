@@ -1,6 +1,3 @@
-// Consumed by elements and the App in later modules.
-#![allow(dead_code)]
-
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
