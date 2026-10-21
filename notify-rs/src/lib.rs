@@ -1,4 +1,5 @@
 mod app;
+mod builder_element;
 mod context;
 mod element;
 mod flags;
@@ -13,4 +14,4 @@ pub use app::App;
 pub use context::BuildContext;
 pub use element::{Element, ElementCore};
 pub use key::Key;
-pub use widget::Widget;
+pub use widget::{BuilderWidget, Widget};

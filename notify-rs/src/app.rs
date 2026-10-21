@@ -33,6 +33,18 @@ impl App {
         self.update();
     }
 
+    /// Registers the callback that asks the backend for a frame, replacing the
+    /// previous one. Called once per transition to "needs update", from
+    /// whichever thread marked an element dirty.
+    pub fn on_needs_update(&mut self, wake: impl Fn() + Send + Sync + 'static) {
+        self.signal.set_wake(Arc::new(wake));
+    }
+
+    /// Whether an element was marked dirty since the last update.
+    pub fn needs_update(&self) -> bool {
+        self.signal.is_pending()
+    }
+
     /// Rebuilds the elements marked dirty since the last update, visiting only
     /// the branches that lead to them.
     pub fn update(&mut self) {
@@ -134,6 +146,26 @@ fn short_type_name(full: &str) -> String {
 mod tests {
     use super::*;
     use crate::test_support::{Group, Leaf, Log, Probe, rc};
+    use crate::widget::BuilderWidget;
+    use reactive_rs::Notifier;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst};
+    use std::thread;
+
+    fn wake_counter(app: &mut App) -> Arc<AtomicUsize> {
+        let count = Arc::new(AtomicUsize::new(0));
+        let c = count.clone();
+        app.on_needs_update(move || {
+            c.fetch_add(1, SeqCst);
+        });
+        count
+    }
+
+    fn notified_pair(log: &Log, n: &Arc<Notifier>) -> Rc<dyn Widget> {
+        rc(Group::new(vec![
+            rc(Probe::new("a", log).with_notifier(n.clone())),
+            rc(Probe::new("b", log)),
+        ]))
+    }
 
     fn probe_with_two_children(log: &Log) -> Rc<dyn Widget> {
         rc(Group::new(vec![rc(Probe::new("a", log).with_children(
@@ -263,5 +295,200 @@ mod tests {
     #[test]
     fn short_type_name_strips_module_paths() {
         assert_eq!(short_type_name("a::b::C<d::E, F>"), "C<E, F>");
+    }
+
+    #[test]
+    fn notification_rebuilds_only_the_notified_element() {
+        let (log, mut app, n) = (Log::default(), App::new(), Arc::new(Notifier::new()));
+        app.set_root(notified_pair(&log, &n));
+        log.take();
+        n.notify_listeners();
+        assert!(app.needs_update());
+        app.update();
+        assert_eq!(log.take(), ["build a"]);
+        assert_eq!(app.last_visited(), 2);
+    }
+
+    #[test]
+    fn notification_from_another_thread_wakes_once_per_transition() {
+        let (log, mut app, n) = (Log::default(), App::new(), Arc::new(Notifier::new()));
+        app.set_root(notified_pair(&log, &n));
+        let wakes = wake_counter(&mut app);
+        let remote = n.clone();
+        thread::spawn(move || {
+            remote.notify_listeners();
+            remote.notify_listeners();
+        })
+        .join()
+        .unwrap();
+        assert_eq!(wakes.load(SeqCst), 1);
+        app.update();
+        n.notify_listeners();
+        assert_eq!(wakes.load(SeqCst), 2);
+    }
+
+    #[test]
+    fn notifications_between_updates_coalesce() {
+        let (log, mut app, n) = (Log::default(), App::new(), Arc::new(Notifier::new()));
+        app.set_root(notified_pair(&log, &n));
+        log.take();
+        n.notify_listeners();
+        n.notify_listeners();
+        n.notify_listeners();
+        app.update();
+        assert_eq!(log.take(), ["build a"]);
+    }
+
+    #[test]
+    fn registering_wake_with_pending_update_calls_it_at_once() {
+        let (log, mut app, n) = (Log::default(), App::new(), Arc::new(Notifier::new()));
+        app.set_root(notified_pair(&log, &n));
+        n.notify_listeners();
+        assert_eq!(wake_counter(&mut app).load(SeqCst), 1);
+    }
+
+    #[test]
+    fn changing_the_notifier_moves_the_subscription() {
+        let (log, mut app) = (Log::default(), App::new());
+        let (n1, n2) = (Arc::new(Notifier::new()), Arc::new(Notifier::new()));
+        app.set_root(rc(Probe::new("a", &log).with_notifier(n1.clone())));
+        app.set_root(rc(Probe::new("a", &log).with_notifier(n2.clone())));
+        n1.notify_listeners();
+        assert!(!app.needs_update());
+        n2.notify_listeners();
+        assert!(app.needs_update());
+    }
+
+    #[test]
+    fn removed_element_no_longer_wakes_the_app() {
+        let (log, mut app, n) = (Log::default(), App::new(), Arc::new(Notifier::new()));
+        app.set_root(rc(Probe::new("a", &log).with_notifier(n.clone())));
+        app.set_root(rc(Leaf::new()));
+        n.notify_listeners();
+        assert!(!app.needs_update());
+    }
+
+    #[test]
+    fn deep_notification_visits_only_its_path() {
+        let (log, mut app, n) = (Log::default(), App::new(), Arc::new(Notifier::new()));
+        app.set_root(rc(Group::new(vec![
+            rc(Group::new(vec![rc(Group::new(vec![rc(Probe::new(
+                "a", &log,
+            )
+            .with_notifier(n.clone()))]))])),
+            rc(Group::new(vec![rc(Probe::new("b", &log))])),
+            rc(Probe::new("c", &log)),
+        ])));
+        n.notify_listeners();
+        app.update();
+        assert_eq!(app.last_visited(), 4);
+    }
+
+    struct Echo {
+        notifier: Arc<Notifier>,
+        notified: Arc<AtomicBool>,
+        builds: Arc<AtomicUsize>,
+    }
+
+    impl BuilderWidget for Echo {
+        fn notifier(&self) -> Option<&Arc<Notifier>> {
+            Some(&self.notifier)
+        }
+
+        fn build(&self, _ctx: &mut BuildContext<'_>) -> Rc<dyn Widget> {
+            self.builds.fetch_add(1, SeqCst);
+            if !self.notified.swap(true, SeqCst) {
+                self.notifier.notify_listeners();
+            }
+            rc(Leaf::new())
+        }
+    }
+
+    #[test]
+    fn notification_during_build_schedules_another_update() {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let mut app = App::new();
+        app.set_root(rc(Echo {
+            notifier: Arc::new(Notifier::new()),
+            notified: Arc::new(AtomicBool::new(false)),
+            builds: builds.clone(),
+        }));
+        assert!(app.needs_update());
+        assert_eq!(builds.load(SeqCst), 1);
+        app.update();
+        assert_eq!(builds.load(SeqCst), 2);
+        assert!(!app.needs_update());
+    }
+
+    #[test]
+    fn late_notification_from_removed_element_is_harmless() {
+        let (log, mut app) = (Log::default(), App::new());
+        app.set_root(rc(Group::new(vec![rc(Probe::new("a", &log))])));
+        let listener = app.root.as_ref().unwrap().children()[0]
+            .core()
+            .dirty_listener();
+        app.set_root(rc(Group::new(vec![])));
+        log.take();
+        listener();
+        app.update();
+        assert!(log.take().is_empty());
+    }
+
+    #[derive(Clone)]
+    struct Watcher {
+        notifier: Arc<Notifier>,
+        value: Arc<AtomicU64>,
+        seen: Arc<AtomicU64>,
+    }
+
+    impl BuilderWidget for Watcher {
+        fn notifier(&self) -> Option<&Arc<Notifier>> {
+            Some(&self.notifier)
+        }
+
+        fn build(&self, _ctx: &mut BuildContext<'_>) -> Rc<dyn Widget> {
+            self.seen.store(self.value.load(SeqCst), SeqCst);
+            rc(Leaf::new())
+        }
+    }
+
+    #[test]
+    fn concurrent_notifications_are_never_lost() {
+        let watchers: Vec<Watcher> = (0..8)
+            .map(|_| Watcher {
+                notifier: Arc::new(Notifier::new()),
+                value: Arc::new(AtomicU64::new(0)),
+                seen: Arc::new(AtomicU64::new(0)),
+            })
+            .collect();
+        let mut app = App::new();
+        app.set_root(rc(Group::new(
+            watchers.iter().map(|w| rc(w.clone())).collect(),
+        )));
+
+        thread::scope(|s| {
+            let handles: Vec<_> = watchers
+                .iter()
+                .map(|w| {
+                    let w = w.clone();
+                    s.spawn(move || {
+                        for i in 1..=1000 {
+                            w.value.store(i, SeqCst);
+                            w.notifier.notify_listeners();
+                        }
+                    })
+                })
+                .collect();
+            while !handles.iter().all(|h| h.is_finished()) {
+                app.update();
+            }
+        });
+        while app.needs_update() {
+            app.update();
+        }
+
+        for w in &watchers {
+            assert_eq!(w.seen.load(SeqCst), 1000);
+        }
     }
 }

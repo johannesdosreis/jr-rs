@@ -2,7 +2,7 @@ use std::any::{Any, type_name};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use reactive_rs::Listener;
+use reactive_rs::{Listenable, Listener, Notifier};
 
 use crate::context::BuildContext;
 use crate::flags::Flags;
@@ -37,6 +37,7 @@ pub struct ElementCore {
     pub(crate) widget: Rc<dyn Widget>,
     pub(crate) children: Vec<Box<dyn Element>>,
     pub(crate) flags: Arc<Flags>,
+    pub(crate) subscription: Option<(Arc<Notifier>, usize)>,
 }
 
 impl ElementCore {
@@ -45,6 +46,7 @@ impl ElementCore {
             widget,
             children: Vec::new(),
             flags: Flags::new(),
+            subscription: None,
         }
     }
 
@@ -79,6 +81,37 @@ impl ElementCore {
     pub fn dirty_listener(&self) -> Listener {
         let flags = self.flags.clone();
         Arc::new(move || flags.mark_dirty())
+    }
+
+    /// Listens to the current widget's notifier, moving the subscription when
+    /// the notifier changed.
+    pub(crate) fn sync_subscription(&mut self) {
+        let current = self.widget.notifier().cloned();
+        let unchanged = match (&self.subscription, &current) {
+            (Some((subscribed, _)), Some(current)) => Arc::ptr_eq(subscribed, current),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        self.unsubscribe();
+        if let Some(notifier) = current {
+            let id = notifier.add_listener(self.dirty_listener());
+            self.subscription = Some((notifier, id));
+        }
+    }
+
+    fn unsubscribe(&mut self) {
+        if let Some((notifier, id)) = self.subscription.take() {
+            notifier.remove_listener(id);
+        }
+    }
+}
+
+impl Drop for ElementCore {
+    fn drop(&mut self) {
+        self.unsubscribe();
     }
 }
 

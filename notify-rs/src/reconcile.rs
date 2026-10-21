@@ -20,10 +20,11 @@ pub(crate) fn mount(
     parent: Option<&Arc<Flags>>,
     signal: &Arc<Signal>,
 ) -> Box<dyn Element> {
-    let element = widget.create_element();
-    let flags = &element.core().flags;
-    flags.attach(parent.cloned(), signal.clone());
-    flags.mark_local();
+    let mut element = widget.create_element();
+    let core = element.core_mut();
+    core.flags.attach(parent.cloned(), signal.clone());
+    core.sync_subscription();
+    core.flags.mark_local();
     element
 }
 
@@ -46,6 +47,7 @@ pub(crate) fn update_child(
             } else if can_update(old.widget(), &new) {
                 let core = old.core_mut();
                 core.widget = new;
+                core.sync_subscription();
                 core.flags.mark_local();
                 Some(old)
             } else {
