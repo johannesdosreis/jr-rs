@@ -32,6 +32,8 @@ Os traits `Listenable` e `ValueListenable<T>` oferecem os mesmos três métodos:
 - `subscribe(listener)` registra o listener e devolve um guard que o remove
   quando sai de escopo.
 
+`ValueListenable<T>` também tem `get()`, que devolve uma cópia do valor atual.
+
 Os traits precisam estar em escopo (`use reactive_rs::Listenable;`) para
 chamar esses métodos.
 

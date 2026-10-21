@@ -5,6 +5,7 @@ use crate::subscription::Subscription;
 pub type ValueListener<T> = Arc<dyn Fn(T) + Send + Sync>;
 
 pub trait ValueListenable<T>: Send + Sync {
+    fn get(&self) -> T;
     fn add_listener(&self, listener: ValueListener<T>) -> usize;
     fn remove_listener(&self, id: usize);
 

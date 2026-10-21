@@ -54,7 +54,11 @@ impl<T: Clone + PartialEq> ValueNotifier<T> {
     }
 }
 
-impl<T: Send> ValueListenable<T> for ValueNotifier<T> {
+impl<T: Clone + Send> ValueListenable<T> for ValueNotifier<T> {
+    fn get(&self) -> T {
+        ValueNotifier::get(self)
+    }
+
     fn add_listener(&self, listener: ValueListener<T>) -> usize {
         self.listeners.insert(listener)
     }
@@ -197,6 +201,17 @@ mod tests {
     #[test]
     fn is_send_and_sync() {
         assert_send_sync::<ValueNotifier<i32>>();
+    }
+
+    #[test]
+    fn get_works_through_trait_object() {
+        let n = ValueNotifier::new(3);
+        let listenable: &dyn ValueListenable<i32> = &n;
+        assert_eq!(listenable.get(), 3);
+
+        n.set(4);
+
+        assert_eq!(listenable.get(), 4);
     }
 
     #[test]
