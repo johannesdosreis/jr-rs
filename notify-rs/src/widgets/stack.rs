@@ -234,6 +234,9 @@ fn stack_layout(
                                     result.with_axis(axis, extent, extent)
                                 }
                                 (_, _, Some(extent)) => result.with_axis(axis, extent, extent),
+                                // Free in the plane, as in Flutter; never deeper
+                                // than the stack, so flat UIs stay flat.
+                                _ if axis == Axis::Z => result.with_axis(axis, 0.0, size.depth),
                                 _ => result,
                             }
                         });
@@ -370,6 +373,25 @@ mod tests {
                 rc(Stack::new(vec![sized(10.0, 10.0)]).fit(StackFit::Expand))
             )
             .contains("\n    SizedBox 10x10x0 @ 0,0,0\n")
+        );
+    }
+
+    #[test]
+    fn positioned_without_depth_fits_the_stack_depth() {
+        let fill = || {
+            rc(Positioned::new(rc(SizedBox::expand()))
+                .left(0.0)
+                .top(0.0)
+                .right(0.0)
+                .bottom(0.0))
+        };
+        assert!(
+            layout_of(W, rc(Stack::new(vec![fill()])))
+                .contains("\n  Positioned 300x100x0 @ 0,0,0\n")
+        );
+        assert!(
+            layout_of(Size::new(300.0, 100.0, 50.0), rc(Stack::new(vec![fill()])))
+                .contains("\n  Positioned 300x100x50 @ 0,0,0\n")
         );
     }
 }
