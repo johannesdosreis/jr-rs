@@ -65,6 +65,9 @@ impl Signal {
 pub(crate) struct Flags {
     dirty: AtomicBool,
     descendant_dirty: AtomicBool,
+    needs_layout: AtomicBool,
+    descendant_needs_layout: AtomicBool,
+    relayout_boundary: AtomicBool,
     parent: OnceLock<Arc<Flags>>,
     signal: OnceLock<Arc<Signal>>,
 }
@@ -74,6 +77,9 @@ impl Flags {
         Arc::new(Flags {
             dirty: AtomicBool::new(false),
             descendant_dirty: AtomicBool::new(false),
+            needs_layout: AtomicBool::new(true),
+            descendant_needs_layout: AtomicBool::new(false),
+            relayout_boundary: AtomicBool::new(false),
             parent: OnceLock::new(),
             signal: OnceLock::new(),
         })
@@ -118,6 +124,76 @@ impl Flags {
             }
             ancestor = flags.parent.get();
         }
+    }
+
+    /// Safe from any thread: marks this element for layout, then its ancestors
+    /// up to the nearest relayout boundary (whose size cannot change), sets
+    /// `descendant_needs_layout` above that boundary and requests an update.
+    // Consumed by ElementCore in the next task.
+    #[allow(dead_code)]
+    pub(crate) fn mark_needs_layout(&self) {
+        self.mark_needs_layout_quiet();
+        if let Some(signal) = self.signal.get() {
+            signal.request();
+        }
+    }
+
+    /// Like `mark_needs_layout`, without requesting an update: used by the
+    /// framework during an update.
+    pub(crate) fn mark_needs_layout_quiet(&self) {
+        let mut node = self;
+        loop {
+            if node.needs_layout.swap(true, SeqCst) {
+                return;
+            }
+            match node.parent.get() {
+                Some(parent) if !node.relayout_boundary.load(SeqCst) => node = parent,
+                _ => break,
+            }
+        }
+        let mut ancestor = node.parent.get();
+        while let Some(flags) = ancestor {
+            if flags.descendant_needs_layout.swap(true, SeqCst) {
+                break;
+            }
+            ancestor = flags.parent.get();
+        }
+    }
+
+    // Consumed by the layout pass in the next task.
+    #[allow(dead_code)]
+    pub(crate) fn set_relayout_boundary(&self, boundary: bool) {
+        self.relayout_boundary.store(boundary, SeqCst);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn needs_layout(&self) -> bool {
+        self.needs_layout.load(SeqCst)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn descendant_needs_layout(&self) -> bool {
+        self.descendant_needs_layout.load(SeqCst)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn needs_layout_visit(&self) -> bool {
+        self.needs_layout() || self.descendant_needs_layout()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn take_needs_layout(&self) -> bool {
+        self.needs_layout.swap(false, SeqCst)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn take_descendant_needs_layout(&self) -> bool {
+        self.descendant_needs_layout.swap(false, SeqCst)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn parent(&self) -> Option<&Arc<Flags>> {
+        self.parent.get()
     }
 
     pub(crate) fn take_dirty(&self) -> bool {
@@ -261,5 +337,70 @@ mod tests {
             done.send(count.load(SeqCst)).unwrap();
         });
         assert_eq!(result.recv_timeout(Duration::from_secs(5)), Ok(1));
+    }
+
+    fn clear_layout(flags: &[Arc<Flags>]) {
+        for f in flags {
+            f.take_needs_layout();
+        }
+    }
+
+    #[test]
+    fn new_flags_need_layout() {
+        let (_signal, f) = chain(1);
+        assert!(f[0].needs_layout());
+    }
+
+    #[test]
+    fn needs_layout_propagates_up_to_the_boundary() {
+        let (_signal, f) = chain(4);
+        clear_layout(&f);
+        f[1].set_relayout_boundary(true);
+        f[3].mark_needs_layout_quiet();
+        assert!(f[3].needs_layout() && f[2].needs_layout() && f[1].needs_layout());
+        assert!(!f[0].needs_layout() && f[0].descendant_needs_layout());
+        assert!(!f[1].descendant_needs_layout());
+    }
+
+    #[test]
+    fn root_acts_as_boundary() {
+        let (_signal, f) = chain(2);
+        clear_layout(&f);
+        f[1].mark_needs_layout_quiet();
+        assert!(f[0].needs_layout());
+    }
+
+    #[test]
+    fn marking_stops_at_an_already_marked_element() {
+        let (_signal, f) = chain(3);
+        clear_layout(&f);
+        f[1].mark_needs_layout_quiet();
+        f[0].take_needs_layout();
+        f[2].mark_needs_layout_quiet();
+        assert!(!f[0].needs_layout());
+    }
+
+    #[test]
+    fn quiet_marking_does_not_signal() {
+        let (signal, f) = chain(2);
+        clear_layout(&f);
+        f[1].mark_needs_layout_quiet();
+        assert!(!signal.is_pending());
+        clear_layout(&f);
+        f[1].mark_needs_layout();
+        assert!(signal.is_pending());
+    }
+
+    #[test]
+    fn take_and_visit_for_layout() {
+        let (_signal, f) = chain(2);
+        assert!(f[1].take_needs_layout() && !f[1].needs_layout_visit());
+        f[1].set_relayout_boundary(true);
+        f[1].mark_needs_layout_quiet();
+        assert!(f[0].needs_layout_visit() && f[0].take_descendant_needs_layout());
+        assert!(
+            f[1].parent()
+                .is_some_and(|parent| Arc::ptr_eq(parent, &f[0]))
+        );
     }
 }
