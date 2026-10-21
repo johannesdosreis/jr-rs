@@ -1,0 +1,3 @@
+[workspace]
+members = ["reactive-rs", "notify-rs"]
+resolver = "3"
