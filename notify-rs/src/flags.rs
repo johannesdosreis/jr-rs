@@ -35,10 +35,17 @@ impl Signal {
 
     /// Replaces the wake callback, calling it at once if an update is already pending.
     pub(crate) fn set_wake(&self, wake: Wake) {
-        *self.wake.lock().unwrap_or_else(PoisonError::into_inner) = Some(wake);
+        let old = self
+            .wake
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .replace(wake);
         if self.is_pending() {
             self.wake();
         }
+        // The old callback's destructor is user code and may mark an element
+        // dirty, which locks `wake` again: drop it only after the lock is released.
+        drop(old);
     }
 
     fn wake(&self) {
@@ -138,6 +145,9 @@ impl Flags {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
     fn chain(n: usize) -> (Arc<Signal>, Vec<Arc<Flags>>) {
         let signal = Arc::new(Signal::new());
@@ -228,5 +238,28 @@ mod tests {
         assert!(f[0].needs_visit() && f[1].needs_visit());
         assert!(f[1].take_dirty() && !f[1].take_dirty());
         assert!(f[0].take_descendant_dirty() && !f[0].needs_visit());
+    }
+
+    struct MarkOnDrop(Arc<Flags>);
+
+    impl Drop for MarkOnDrop {
+        fn drop(&mut self) {
+            self.0.mark_dirty();
+        }
+    }
+
+    #[test]
+    fn replacing_wake_drops_the_old_callback_outside_the_lock() {
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            let (signal, f) = chain(1);
+            let guard = MarkOnDrop(f[0].clone());
+            signal.set_wake(Arc::new(move || {
+                let _ = &guard;
+            }));
+            let count = counter(&signal);
+            done.send(count.load(SeqCst)).unwrap();
+        });
+        assert_eq!(result.recv_timeout(Duration::from_secs(5)), Ok(1));
     }
 }
