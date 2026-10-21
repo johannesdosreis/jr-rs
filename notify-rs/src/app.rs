@@ -328,7 +328,14 @@ mod tests {
         let mut app = App::new();
         app.set_root(widget);
         assert_eq!(app.debug_tree().lines().count(), 1001);
-        app.update();
+
+        let mut replacement = rc(Leaf::keyed(1i32));
+        for _ in 0..1000 {
+            replacement = rc(Group::new(vec![replacement]));
+        }
+        app.set_root(replacement);
+        assert_eq!(app.last_visited(), 1001);
+        assert!(app.debug_tree().ends_with("Leaf #1\n"));
         drop(app);
     }
 

@@ -336,4 +336,17 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(drops(&log), ["drop c", "drop b", "drop a"]);
     }
+
+    #[test]
+    fn removing_at_both_ends_drops_only_those_elements() {
+        let (log, mut app) = (Log::default(), App::new());
+        app.set_root(group(vec![
+            keyed(&log, "a", 1),
+            keyed(&log, "b", 2),
+            keyed(&log, "c", 3),
+        ]));
+        log.take();
+        app.set_root(group(vec![keyed(&log, "b", 2)]));
+        assert_eq!(lifecycle(&log), ["drop a", "drop c"]);
+    }
 }
