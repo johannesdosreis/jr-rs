@@ -67,19 +67,20 @@ pub(crate) fn update_children(
     parent: &Arc<Flags>,
     signal: &Arc<Signal>,
 ) -> Vec<Box<dyn Element>> {
+    let mut old = Doomed(old.into_iter().map(Some).collect());
     check_unique_keys(&new);
-    let mut old: Vec<Option<Box<dyn Element>>> = old.into_iter().map(Some).collect();
     let compatible = |old: &Option<Box<dyn Element>>, new: &Rc<dyn Widget>| {
         old.as_ref()
             .is_some_and(|old| can_update(old.widget(), new))
     };
-    let mut children = Vec::with_capacity(new.len());
+    let mut children = Doomed(Vec::with_capacity(new.len()));
     let (mut old_top, mut new_top) = (0, 0);
-    let (mut old_bottom, mut new_bottom) = (old.len(), new.len());
+    let (mut old_bottom, mut new_bottom) = (old.0.len(), new.len());
 
-    while old_top < old_bottom && new_top < new_bottom && compatible(&old[old_top], &new[new_top]) {
-        children.extend(update_child(
-            old[old_top].take(),
+    while old_top < old_bottom && new_top < new_bottom && compatible(&old.0[old_top], &new[new_top])
+    {
+        children.0.push(update_child(
+            old.0[old_top].take(),
             Some(new[new_top].clone()),
             Some(parent),
             signal,
@@ -90,14 +91,14 @@ pub(crate) fn update_children(
 
     while old_top < old_bottom
         && new_top < new_bottom
-        && compatible(&old[old_bottom - 1], &new[new_bottom - 1])
+        && compatible(&old.0[old_bottom - 1], &new[new_bottom - 1])
     {
         old_bottom -= 1;
         new_bottom -= 1;
     }
 
     let mut keyed = HashMap::new();
-    for (offset, slot) in old[old_top..old_bottom].iter_mut().enumerate() {
+    for (offset, slot) in old.0[old_top..old_bottom].iter_mut().enumerate() {
         match slot.as_ref().and_then(|element| element.widget().key()) {
             Some(key) => {
                 keyed.insert(key, old_top + offset);
@@ -110,9 +111,9 @@ pub(crate) fn update_children(
         let reused = widget
             .key()
             .and_then(|key| keyed.get(&key).copied())
-            .filter(|&index| compatible(&old[index], widget))
-            .and_then(|index| old[index].take());
-        children.extend(update_child(
+            .filter(|&index| compatible(&old.0[index], widget))
+            .and_then(|index| old.0[index].take());
+        children.0.push(update_child(
             reused,
             Some(widget.clone()),
             Some(parent),
@@ -120,20 +121,36 @@ pub(crate) fn update_children(
         ));
     }
 
-    for slot in &mut old[old_top..old_bottom] {
+    for slot in &mut old.0[old_top..old_bottom] {
         slot.take().into_iter().for_each(destroy);
     }
 
-    for (old_index, new_index) in (old_bottom..old.len()).zip(new_bottom..new.len()) {
-        children.extend(update_child(
-            old[old_index].take(),
+    for (old_index, new_index) in (old_bottom..old.0.len()).zip(new_bottom..new.len()) {
+        children.0.push(update_child(
+            old.0[old_index].take(),
             Some(new[new_index].clone()),
             Some(parent),
             signal,
         ));
     }
 
-    children
+    std::mem::take(&mut children.0)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Elements in the middle of a reconciliation. If it panics, they are still
+/// destroyed children first, last to first, instead of by the default drop
+/// glue, which would drop each parent before its children.
+struct Doomed(Vec<Option<Box<dyn Element>>>);
+
+impl Drop for Doomed {
+    fn drop(&mut self) {
+        while let Some(slot) = self.0.pop() {
+            slot.into_iter().for_each(destroy);
+        }
+    }
 }
 
 fn check_unique_keys(widgets: &[Rc<dyn Widget>]) {
@@ -155,9 +172,32 @@ pub(crate) fn destroy(mut element: Box<dyn Element>) {
 #[cfg(test)]
 mod tests {
     use crate::app::App;
+    use crate::element::Element;
     use crate::test_support::{Group, Leaf, Log, Probe, rc};
     use crate::widget::Widget;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
+
+    /// A widget whose element cannot be created.
+    struct Bomb;
+
+    impl Widget for Bomb {
+        fn create_element(self: Rc<Self>) -> Box<dyn Element> {
+            panic!("create_element falhou");
+        }
+    }
+
+    fn parent_with_two_children(log: &Log) -> Rc<dyn Widget> {
+        rc(Probe::new("a", log)
+            .with_children(vec![rc(Probe::new("b", log)), rc(Probe::new("c", log))]))
+    }
+
+    fn drops(log: &Log) -> Vec<String> {
+        log.take()
+            .into_iter()
+            .filter(|entry| entry.starts_with("drop"))
+            .collect()
+    }
 
     fn keyed(log: &Log, name: &'static str, key: i32) -> Rc<dyn Widget> {
         rc(Probe::new(name, log).with_key(key))
@@ -271,5 +311,29 @@ mod tests {
         let mut app = App::new();
         app.set_root(group(vec![rc(Leaf::keyed(1u32)), rc(Leaf::keyed(1i64))]));
         assert_eq!(app.debug_tree(), "Group\n  Leaf #1\n  Leaf #1\n");
+    }
+
+    #[test]
+    fn duplicate_key_panic_still_drops_children_first() {
+        let (log, mut app) = (Log::default(), App::new());
+        app.set_root(group(vec![parent_with_two_children(&log)]));
+        log.take();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            app.set_root(group(vec![rc(Leaf::keyed(1i32)), rc(Leaf::keyed(1i32))]));
+        }));
+        assert!(result.is_err());
+        assert_eq!(drops(&log), ["drop c", "drop b", "drop a"]);
+    }
+
+    #[test]
+    fn create_element_panic_still_drops_children_first() {
+        let (log, mut app) = (Log::default(), App::new());
+        app.set_root(group(vec![parent_with_two_children(&log)]));
+        log.take();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            app.set_root(group(vec![parent_with_two_children(&log), rc(Bomb)]));
+        }));
+        assert!(result.is_err());
+        assert_eq!(drops(&log), ["drop c", "drop b", "drop a"]);
     }
 }
