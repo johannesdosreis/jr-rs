@@ -4,6 +4,7 @@ mod constrained;
 mod flex;
 mod padding;
 mod stack;
+mod wrap;
 
 pub use align::{Align, Center};
 pub use aspect_ratio::AspectRatio;
@@ -14,3 +15,4 @@ pub use flex::{
 };
 pub use padding::Padding;
 pub use stack::{Positioned, PositionedParentData, Stack, StackFit};
+pub use wrap::{Wrap, WrapAlignment, WrapCrossAlignment};
