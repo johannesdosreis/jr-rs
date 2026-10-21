@@ -7,6 +7,14 @@
 //! implement [`Widget::create_element`] and [`Element`], embedding an
 //! [`ElementCore`]. Values are shared down the tree with
 //! [`BuildContext::provide`] and read with [`BuildContext::get`].
+//!
+//! Layout follows Flutter's protocol in three dimensions: [`App::set_size`]
+//! gives the root tight [`Constraints`], constraints go down, sizes go up and
+//! each parent positions its children. Widgets such as [`Row`], [`Stack`] and
+//! [`Grid`] implement [`Element::layout`]; elements that do not are laid out by
+//! a default that passes the constraints through. Layout is incremental: only
+//! elements marked by a rebuild or by [`ElementCore::mark_needs_layout`] are
+//! laid out again, up to the nearest relayout boundary.
 
 mod app;
 mod builder_element;
