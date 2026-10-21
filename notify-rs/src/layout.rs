@@ -20,7 +20,10 @@ pub(crate) fn layout_element(
     parent_uses_size: bool,
 ) -> Size {
     let constraints = normalize_constraints(constraints);
-    let boundary = !parent_uses_size || element.sized_by_parent() || constraints.is_tight();
+    // An element exposing parent data is never a boundary: its parent's layout
+    // depends on that data, so changes below must reach the parent.
+    let boundary = (!parent_uses_size || element.sized_by_parent() || constraints.is_tight())
+        && element.parent_data().is_none();
     let flags = element.core().flags.clone();
     flags.set_relayout_boundary(boundary);
     element.core_mut().parent_uses_size = parent_uses_size;

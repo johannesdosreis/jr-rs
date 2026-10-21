@@ -503,7 +503,11 @@ mod tests {
     use crate::test_support::{
         LayoutProbe, Log, Probe, app_with, layout_of, rc, root_children, sized, unbounded_layout,
     };
+    use crate::widget::BuilderWidget;
     use crate::widgets::{Center, SizedBox};
+    use reactive_rs::Notifier;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
 
     const W: Size = Size::flat(300.0, 100.0);
 
@@ -787,5 +791,151 @@ mod tests {
             ))
             .contains("\n    SizedBox 10x10x0 @ 0,0,0\n")
         );
+    }
+
+    /// Returns an `Expanded` whose flex is read from `flex` at build time.
+    struct FlexBuilder {
+        notifier: Arc<Notifier>,
+        flex: Arc<AtomicU32>,
+    }
+
+    impl BuilderWidget for FlexBuilder {
+        fn notifier(&self) -> Option<&Arc<Notifier>> {
+            Some(&self.notifier)
+        }
+
+        fn build(&self, _ctx: &mut BuildContext<'_>) -> Rc<dyn Widget> {
+            rc(Expanded::new(rc(SizedBox::new())).flex(self.flex.load(SeqCst)))
+        }
+    }
+
+    fn flex_builder() -> (Arc<Notifier>, Arc<AtomicU32>, Rc<dyn Widget>) {
+        let (notifier, flex) = (Arc::new(Notifier::new()), Arc::new(AtomicU32::new(1)));
+        let builder = rc(FlexBuilder {
+            notifier: notifier.clone(),
+            flex: flex.clone(),
+        });
+        (notifier, flex, builder)
+    }
+
+    #[test]
+    fn builder_returning_expanded_is_flexible() {
+        let (_notifier, _flex, builder) = flex_builder();
+        let app = app_with(W, rc(Row::new(vec![sized(50.0, 20.0), builder])));
+        assert_eq!(widths(&app), [50.0, 250.0]);
+    }
+
+    #[test]
+    fn changing_flex_through_a_builder_relayouts_the_row() {
+        let (notifier, flex, builder) = flex_builder();
+        let mut app = app_with(
+            W,
+            rc(Row::new(vec![
+                rc(Expanded::new(rc(SizedBox::new()))),
+                builder,
+            ])),
+        );
+        assert_eq!(widths(&app), [150.0, 150.0]);
+        flex.store(2, SeqCst);
+        notifier.notify_listeners();
+        app.update();
+        assert_eq!(widths(&app), [100.0, 200.0]);
+    }
+
+    static FLEX_ONE: FlexParentData = FlexParentData {
+        flex: 1,
+        fit: FlexFit::Tight,
+    };
+
+    /// Exposes flex parent data only while `has_flex` was set at its last build.
+    struct MaybeFlex {
+        notifier: Arc<Notifier>,
+        has_flex: Arc<AtomicBool>,
+    }
+
+    impl Widget for MaybeFlex {
+        fn notifier(&self) -> Option<&Arc<Notifier>> {
+            Some(&self.notifier)
+        }
+
+        fn create_element(self: Rc<Self>) -> Box<dyn Element> {
+            Box::new(MaybeFlexElement {
+                core: ElementCore::new(self),
+                has_flex: false,
+            })
+        }
+    }
+
+    struct MaybeFlexElement {
+        core: ElementCore,
+        has_flex: bool,
+    }
+
+    impl Element for MaybeFlexElement {
+        fn core(&self) -> &ElementCore {
+            &self.core
+        }
+
+        fn core_mut(&mut self) -> &mut ElementCore {
+            &mut self.core
+        }
+
+        fn build(&mut self, _ctx: &mut BuildContext<'_>) -> Vec<Rc<dyn Widget>> {
+            self.has_flex = self.core.widget_as::<MaybeFlex>().has_flex.load(SeqCst);
+            Vec::new()
+        }
+
+        fn parent_data(&self) -> Option<&dyn Any> {
+            self.has_flex.then_some(&FLEX_ONE as &dyn Any)
+        }
+    }
+
+    fn maybe_flex() -> (Arc<Notifier>, Arc<AtomicBool>, Rc<dyn Widget>) {
+        let (notifier, has_flex) = (Arc::new(Notifier::new()), Arc::new(AtomicBool::new(true)));
+        let widget = rc(MaybeFlex {
+            notifier: notifier.clone(),
+            has_flex: has_flex.clone(),
+        });
+        (notifier, has_flex, widget)
+    }
+
+    fn stretched_row(children: Vec<Rc<dyn Widget>>) -> Rc<dyn Widget> {
+        rc(Row::new(children).cross_axis_alignment(CrossAxisAlignment::Stretch))
+    }
+
+    #[test]
+    fn removing_parent_data_relayouts_the_parent() {
+        let (notifier, has_flex, widget) = maybe_flex();
+        let mut app = app_with(W, stretched_row(vec![sized(50.0, 20.0), widget]));
+        assert_eq!(widths(&app), [50.0, 250.0]);
+        has_flex.store(false, SeqCst);
+        notifier.notify_listeners();
+        app.update();
+        assert_eq!(widths(&app), [50.0, 0.0]);
+    }
+
+    /// Returns `child` as it is: a transparent composition.
+    struct Wrapper {
+        child: Rc<dyn Widget>,
+    }
+
+    impl BuilderWidget for Wrapper {
+        fn build(&self, _ctx: &mut BuildContext<'_>) -> Rc<dyn Widget> {
+            self.child.clone()
+        }
+    }
+
+    #[test]
+    fn parent_data_change_inside_a_builder_reaches_the_flex() {
+        let (notifier, has_flex, widget) = maybe_flex();
+        let mut app = app_with(
+            W,
+            stretched_row(vec![sized(50.0, 20.0), rc(Wrapper { child: widget })]),
+        );
+        assert_eq!(widths(&app), [50.0, 250.0]);
+        has_flex.store(false, SeqCst);
+        notifier.notify_listeners();
+        app.update();
+        assert_eq!(widths(&app), [50.0, 0.0]);
     }
 }

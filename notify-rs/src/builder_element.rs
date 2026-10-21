@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -30,6 +31,12 @@ impl<B: BuilderWidget> Element for BuilderElement<B> {
 
     fn build(&mut self, ctx: &mut BuildContext<'_>) -> Vec<Rc<dyn Widget>> {
         vec![self.core.widget_as::<B>().build(ctx)]
+    }
+
+    /// A composition is transparent: its child's parent data (an `Expanded`
+    /// it builds, for example) is what its own parent reads.
+    fn parent_data(&self) -> Option<&dyn Any> {
+        self.core.children().first()?.parent_data()
     }
 }
 

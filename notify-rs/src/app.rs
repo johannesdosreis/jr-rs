@@ -155,6 +155,7 @@ fn visit(
     flags.take_descendant_dirty();
     let mut visit_all = full;
     if rebuild {
+        let had_parent_data = element.parent_data().is_some();
         element.core_mut().dependencies.clear();
         let mut ctx = BuildContext::new(scope, &flags);
         let widgets = element.build(&mut ctx);
@@ -165,9 +166,10 @@ fn visit(
         let old = std::mem::take(&mut core.children);
         core.children = update_children(old, widgets, &flags, signal);
         // A rebuilt element may have new children or configuration. Its parent
-        // reads its parent data, so the parent is laid out again too.
+        // reads its parent data, so when it had or has some, the parent is laid
+        // out again too.
         flags.mark_needs_layout_quiet();
-        if element.parent_data().is_some()
+        if (had_parent_data || element.parent_data().is_some())
             && let Some(parent) = flags.parent()
         {
             parent.mark_needs_layout_quiet();
