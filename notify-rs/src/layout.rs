@@ -84,7 +84,9 @@ pub(crate) fn default_layout(core: &mut ElementCore, constraints: Constraints) -
     constraints.constrain(largest)
 }
 
-fn normalize_constraints(constraints: Constraints) -> Constraints {
+/// Valid constraints pass through. Invalid ones panic in debug builds and are
+/// repaired in release builds.
+pub(crate) fn normalize_constraints(constraints: Constraints) -> Constraints {
     let valid = Axis::ALL.iter().all(|&axis| {
         let (min, max) = (constraints.min(axis), constraints.max(axis));
         min.is_finite() && min >= 0.0 && !max.is_nan() && min <= max

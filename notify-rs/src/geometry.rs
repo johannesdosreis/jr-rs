@@ -156,7 +156,7 @@ impl Constraints {
 
     /// Makes `axis` exact at `value`, kept inside the axis' current range.
     pub fn tighten(self, axis: Axis, value: f32) -> Constraints {
-        let value = value.clamp(self.min(axis), self.max(axis));
+        let value = clamp(value, self.min(axis), self.max(axis));
         self.with_axis(axis, value, value)
     }
 
@@ -168,7 +168,7 @@ impl Constraints {
 
     pub fn constrain(&self, size: Size) -> Size {
         Axis::ALL.iter().fold(size, |size, &axis| {
-            let value = size.along(axis).clamp(self.min(axis), self.max(axis));
+            let value = clamp(size.along(axis), self.min(axis), self.max(axis));
             size.with_axis(axis, value)
         })
     }
@@ -186,8 +186,8 @@ impl Constraints {
             let (low, high) = (other.min(axis), other.max(axis));
             result.with_axis(
                 axis,
-                self.min(axis).clamp(low, high),
-                self.max(axis).clamp(low, high),
+                clamp(self.min(axis), low, high),
+                clamp(self.max(axis), low, high),
             )
         })
     }
@@ -211,6 +211,12 @@ impl Constraints {
     pub fn smallest(&self) -> Size {
         Size::new(self.min_width, self.min_height, self.min_depth)
     }
+}
+
+/// Like `f32::clamp`, but never panics: invalid bounds (min above max, NaN)
+/// give a meaningless value instead, which layout validation then reports.
+fn clamp(value: f32, min: f32, max: f32) -> f32 {
+    value.max(min).min(max)
 }
 
 /// Space around a child: four sides in the plane plus front and back in depth.
@@ -444,5 +450,22 @@ mod tests {
             Alignment::TOP_LEFT.with_z(-1.0).offset_of(child, parent),
             Offset::ZERO
         );
+    }
+
+    #[test]
+    fn invalid_constraints_never_panic_in_geometry() {
+        let invalid = Constraints {
+            min_width: 10.0,
+            max_width: 5.0,
+            ..Constraints::unbounded()
+        };
+        let _ = invalid.constrain(Size::flat(7.0, 0.0));
+        let _ = Constraints::loose(Size::flat(100.0, 100.0)).enforce(invalid);
+        let _ = invalid.tighten(Axis::X, 3.0);
+        let nan = Constraints {
+            max_height: f32::NAN,
+            ..Constraints::unbounded()
+        };
+        let _ = nan.constrain(Size::flat(1.0, 1.0));
     }
 }

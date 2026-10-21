@@ -4,6 +4,7 @@ use std::rc::Rc;
 use crate::context::BuildContext;
 use crate::element::{Element, ElementCore};
 use crate::geometry::{Constraints, Offset, Size};
+use crate::layout::normalize_constraints;
 use crate::widget::Widget;
 
 /// Imposes extra constraints on its child, combined with the parent's.
@@ -167,7 +168,8 @@ impl<W: BoxWidget> Element for BoxElement<W> {
     }
 
     fn layout(&mut self, constraints: Constraints) -> Size {
-        let inner = self.core.widget_as::<W>().extra().enforce(constraints);
+        let extra = self.core.widget_as::<W>().extra();
+        let inner = normalize_constraints(extra.enforce(constraints));
         if self.core.children().is_empty() {
             return inner.constrain(Size::ZERO);
         }
@@ -242,5 +244,27 @@ mod tests {
                 .child(sized(10.0, 10.0))))),
         );
         assert!(layout.contains("\n  SizedBox 30x10x0 @ 35,45,0\n    SizedBox 30x10x0 @ 0,0,0\n"));
+    }
+
+    fn invalid_box() -> String {
+        let invalid = Constraints {
+            min_width: 50.0,
+            max_width: 10.0,
+            ..Constraints::unbounded()
+        };
+        layout_of(W, rc(Center::new(rc(ConstrainedBox::new(invalid)))))
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "restrições inválidas")]
+    fn constrained_box_with_invalid_constraints_panics_in_debug() {
+        invalid_box();
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn constrained_box_with_invalid_constraints_is_normalized_in_release() {
+        assert!(invalid_box().contains("\n  ConstrainedBox 10x0x0 @ 45,50,0\n"));
     }
 }
