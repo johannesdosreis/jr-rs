@@ -18,6 +18,7 @@ mod key;
 mod layout;
 mod reconcile;
 mod widget;
+mod widgets;
 
 #[cfg(test)]
 mod test_support;
@@ -30,3 +31,4 @@ pub use key::Key;
 pub use layout::impossible_layout;
 pub use reactive_rs::{Listenable, Listener, Notifier};
 pub use widget::{BuilderWidget, Widget};
+pub use widgets::*;

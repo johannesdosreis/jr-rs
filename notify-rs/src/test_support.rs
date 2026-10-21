@@ -13,6 +13,7 @@ use crate::element::{Element, ElementCore};
 use crate::geometry::{Constraints, Size};
 use crate::key::Key;
 use crate::widget::Widget;
+use crate::widgets::SizedBox;
 
 /// Records events, in order, across threads.
 #[derive(Clone, Default)]
@@ -336,4 +337,9 @@ pub(crate) fn layout_of(size: Size, root: Rc<dyn Widget>) -> String {
     app.set_size(size);
     app.set_root(root);
     app.debug_layout()
+}
+
+/// A `SizedBox` with the given width and height.
+pub(crate) fn sized(width: f32, height: f32) -> Rc<dyn Widget> {
+    rc(SizedBox::new().width(width).height(height))
 }
