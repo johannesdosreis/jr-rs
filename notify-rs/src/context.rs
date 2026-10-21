@@ -75,10 +75,15 @@ impl<'a> BuildContext<'a> {
         self.dependencies
             .insert(TypeId::of::<T>(), entry.map(|entry| entry.value.clone()));
         let entry = entry?;
-        entry
-            .dependents
-            .borrow_mut()
-            .insert(Arc::as_ptr(self.flags) as usize, Arc::downgrade(self.flags));
+        let mut dependents = entry.dependents.borrow_mut();
+        dependents.insert(Arc::as_ptr(self.flags) as usize, Arc::downgrade(self.flags));
+        // Readers that were destroyed leave dead entries behind while the value
+        // stays the same; dropping them at every power of two keeps the registry
+        // bounded at amortized O(1) per read.
+        if dependents.len() >= 16 && dependents.len().is_power_of_two() {
+            dependents.retain(|_, dependent| dependent.strong_count() > 0);
+        }
+        drop(dependents);
         entry.value.clone().downcast::<T>().ok()
     }
 
@@ -419,5 +424,22 @@ mod tests {
         assert!(log.take().len() <= 1);
         app.set_root(provider(Some(3), &child));
         assert!(log.take().is_empty());
+    }
+
+    #[test]
+    fn registry_stays_bounded_when_readers_are_recreated() {
+        let (log, mut app) = (Log::default(), App::new());
+        for i in 0..1000 {
+            let reader = rc(Reader::new("r", &log));
+            let child = if i % 2 == 0 {
+                reader
+            } else {
+                rc(Group::new(vec![reader]))
+            };
+            app.set_root(provider(Some(1), &child));
+        }
+        let root = app.root.as_ref().unwrap();
+        let provided = &root.core().provided[&TypeId::of::<Theme>()];
+        assert!(provided.dependents.borrow().len() < 32);
     }
 }
